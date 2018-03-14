@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 #pylab inline --no-import-all
 
 
-with open("log1.txt") as f:
+with open("sin440Hz_100HzSamp.txt") as f:
     data = f.readlines()
 # you may also want to remove whitespace characters like `\n` at the end of each line
 data = [x.strip() for x in data] 

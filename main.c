@@ -38,7 +38,10 @@ unsigned char tecla = '\0';
 unsigned int Channel, PinConfig, Scanselect;
 unsigned int Adcon3_reg, Adcon2_reg, Adcon1_reg;
 
- int goADC=0;
+ int goADC, t_buf =0;
+ 
+ 
+ unsigned int buf[512];
 
 /*UART 2 Interruption Cycle*/
 void __attribute__((interrupt, no_auto_psv)) _U2RXInterrupt(void){
@@ -60,6 +63,8 @@ void __attribute__((interrupt, auto_psv)) _T2Interrupt(void)
 /* declaration o function*/
 void config_uart(void);
 void config_adc(void);
+void config_main(void);
+int  convert_adc(void);
 void delay_ms(unsigned int delay); //delay in miliseconds
 
 //REMEBER:
@@ -71,69 +76,44 @@ void delay_ms(unsigned int delay); //delay in miliseconds
 /*Main Function*/
 int main(void) {
     
-    //user variables
     int val = 0;
-    float voltage = 0;
+    int i=0;
+    double voltage = 0;
     
-    _TRISF0 = 0;
-    _LATF0 = 0;
+   //config timers and serial
+    config_main();
     
-    _TRISC13 = 0;
-    _LATC13 = 1;
-    
-    /*Timer 2 1ms/1kHz*/
-    T2CONbits.TON = 0;      //Timer_2 is OFF
-    TMR2 = 0;               //resets Timer_2
-    PR2 = 29491;            //sets the maximum count for Timer_2
-    T2CONbits.TCS = 0;      //choose FCY as clock source for Timer_2
-    T2CONbits.TCKPS = 0x00; //sets the Timer_2 pre-scaler to 1
-    IFS0bits.T2IF = 0;      //clears Timer_2 interrupt flag
-    _T2IE = 1;              //enables Timer_2 Interrupts
-    T2CONbits.TON = 1;      //turns Timer_2 OFF     
-    
-    /*PWM configure for OC2 - 1kHz@50% */
-    OC2R = 0;               //Initial Delay (only for the first cycle)
-    OC2RS = PR2/2;          //sets the initial duty_cycle;
-    OC2CONbits.OCM = 6;     //set OC2 mode to PWM
-    OC2CONbits.OCTSEL = 0;  //selects Timer_2 as the OC2 clock source
-   
-/***********************
-* Serial Port configuration bits - UART2
-***********************/
-    U2MODEbits.STSEL = 0;   //one stop bit
-    U2MODEbits.PDSEL = 0;   //data length and parity: 8 bits, no parity
-    U2BRG = 15;             //set baud rate 115200
-    U2MODEbits.UARTEN = 1;  //enable uart 2
-    U2STAbits.UTXEN = 1;	//enable uart 2 tx
-    U2STAbits.URXISEL = 0;  //uart2 receive interrupt at each received character
-    U2STAbits.UTXISEL = 0;  //uart2 send interrupt at each transmited character
-    IFS1bits.U2RXIF = 0;    //uart2 receive interrupt clear flag
-    IFS1bits.U2TXIF = 0;    //uart2 send interrupt clear flag
-    IEC1bits.U2TXIE = 0;    //enable uart2 transmit interrupts
-    IEC1bits.U2RXIE = 1;    //enable uart2 receive interrupts
-
-    __C30_UART=2;           //point printf to UART2 (only needed if use printf)
-/***********************/
-    
-    T2CONbits.TON = 1;      //Turn T2 ON!!!
-    
-    
-    printf("\n\rSerial port ONLINE \n"); 
-    ADPCFG = 0xFC;			//AN0 and AN1 are analog inputs //	ADPCFG = 0xFFFB; // all PORTB = Digital; RB2 = analog
-    
-    
+    //config adc at startup
+    config_adc();
     
     
     while(1)
     {
-        if(goADC){     
-            config_adc();
-            val = convert_adc();
-            voltage = val*0.00488-0.1;
-            printf("Converte ADC = %d, Voltage: %f V \r\n", val,voltage);
-            //__delay_ms(250);
-            _LATF0 = ~_LATF0 ; // Toglle LED
-            goADC = 0;
+        
+        if(t_buf==512){
+            
+            for(i=0;i<512;i++){
+                val = buf[i];
+                voltage = val*0.00488-0.1;
+                printf("%d,%d\r\n", i,val);
+             t_buf=0;
+            }
+           
+            
+        }
+        
+        
+        
+        
+        //2000Hz Samplerate
+        if(goADC){ 
+            if(t_buf <512){
+                val = convert_adc();
+                buf[t_buf]=val;  
+              //  _LATF0 = ~_LATF0 ; // Toggle LED
+                goADC = 0;
+                t_buf++;
+            }
         }
     }
 return 0;
@@ -206,4 +186,59 @@ void delay_ms(unsigned int delay) //delay in miliseconds
  	unsigned int cycles;	// number of cycles
  	for(;delay;delay--)		
     for(cycles=FCY;cycles;cycles--); //~1ms cycle
+}
+
+void config_main(){
+     //user variables
+   
+    
+    _TRISF0 = 0;
+    _LATF0 = 0;
+    
+    _TRISC13 = 0;
+    _LATC13 = 1;
+    
+    /*Timer 2 1ms/1kHz*/
+    T2CONbits.TON = 0;      //Timer_2 is OFF
+    TMR2 = 0;               //resets Timer_2
+    
+    //PR2 = 7372;           //800Hz
+    //PR2 = 2049;             //3.4kHz
+    //PR2 = 29491;            // 200Hz
+    PR2 = 2*29491;            // 100Hz
+    T2CONbits.TCS = 0;      //choose FCY as clock source for Timer_2
+    T2CONbits.TCKPS = 0x00; //sets the Timer_2 pre-scaler to 1
+    IFS0bits.T2IF = 0;      //clears Timer_2 interrupt flag
+    _T2IE = 1;              //enables Timer_2 Interrupts
+    T2CONbits.TON = 1;      //turns Timer_2 on     
+    
+    /*PWM configure for OC2 - 1kHz@50% */
+    OC2R = 0;               //Initial Delay (only for the first cycle)
+    OC2RS = PR2/2;          //sets the initial duty_cycle;
+    OC2CONbits.OCM = 6;     //set OC2 mode to PWM
+    OC2CONbits.OCTSEL = 0;  //selects Timer_2 as the OC2 clock source
+   
+/***********************
+* Serial Port configuration bits - UART2
+***********************/
+    U2MODEbits.STSEL = 0;   //one stop bit
+    U2MODEbits.PDSEL = 0;   //data length and parity: 8 bits, no parity
+    U2BRG = 15;             //set baud rate 115200
+    U2MODEbits.UARTEN = 1;  //enable uart 2
+    U2STAbits.UTXEN = 1;	//enable uart 2 tx
+    U2STAbits.URXISEL = 0;  //uart2 receive interrupt at each received character
+    U2STAbits.UTXISEL = 0;  //uart2 send interrupt at each transmited character
+    IFS1bits.U2RXIF = 0;    //uart2 receive interrupt clear flag
+    IFS1bits.U2TXIF = 0;    //uart2 send interrupt clear flag
+    IEC1bits.U2TXIE = 0;    //enable uart2 transmit interrupts
+    IEC1bits.U2RXIE = 1;    //enable uart2 receive interrupts
+
+    __C30_UART=2;           //point printf to UART2 (only needed if use printf)
+/***********************/
+    
+    T2CONbits.TON = 1;      //Turn T2 ON!!!
+    
+    
+    printf("\n\rSerial port ONLINE \n"); 
+    ADPCFG = 0xFC;			//AN0 and AN1 are analog inputs //	ADPCFG = 0xFFFB; // all PORTB = Digital; RB2 = analog
 }
