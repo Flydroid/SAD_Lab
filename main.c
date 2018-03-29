@@ -14,7 +14,8 @@
 #include <libpic30.h>
 #include <p30F4011.h>
 #include <stdio.h>
-#include <adc10.h>
+#include <math.h>
+//#include <adc10.h>
 
 
 
@@ -33,24 +34,36 @@
 #pragma config MCLRE=MCLR_EN
 #pragma config FPWRT=PWRT_OFF
 
+#define RXBUFFSIZE 20
+
 /* Global Variables */
 unsigned char tecla = '\0';
 unsigned int Channel, PinConfig, Scanselect;
 unsigned int Adcon3_reg, Adcon2_reg, Adcon1_reg;
 
- int goADC, t_buf =0;
+int goADC, t_buf =0;
  
  
- unsigned int buf[512];
+unsigned int buf[512];
 
-/*UART 2 Interruption Cycle*/
-void __attribute__((interrupt, no_auto_psv)) _U2RXInterrupt(void){
-    
-    IFS1bits.U2RXIF = 0;
-    while(U2STAbits.URXDA){
-        tecla = U2RXREG;
-        }      
-}   
+char RXbuffer[RXBUFFSIZE];	//buffer used to store characters from serial port
+int str_pos = 0; 	//position in the RXbuffer
+
+/* This is UART2 receive ISR */
+void __attribute__((__interrupt__,auto_psv)) _U2RXInterrupt(void)
+{
+   	IFS1bits.U2RXIF = 0;	//resets and reenables the Rx2 interrupt flag
+	// Read the receive buffer until at least one or more character can be read
+    while(U2STAbits.URXDA)
+    {
+		RXbuffer[str_pos] = U2RXREG;	//stores the last received char in the buffer
+		str_pos++;						//increments the position in the buffer to store the next char
+		if(str_pos >= 80){str_pos = 0;}	//if the last position is reached then return to initial position
+    }
+}
+
+
+
 
 void __attribute__((interrupt, auto_psv)) _T2Interrupt(void)
 {		
@@ -66,7 +79,7 @@ void config_adc(void);
 void config_main(void);
 int  convert_adc(void);
 void delay_ms(unsigned int delay); //delay in miliseconds
-
+void config_timer2(int s_rate);
 //REMEBER:
 //Set pin signal state using LAT (ex. for pin RE8 LOW: _LATE8 = 0;)
 //Set pin as Input or Output using TRIS (ex. for pin RE8 as output: _TRISE8 = 0;)
@@ -76,47 +89,80 @@ void delay_ms(unsigned int delay); //delay in miliseconds
 /*Main Function*/
 int main(void) {
     
-    int val = 0;
+    uint16_t val = 0;
+    int s_buf;
     int i=0;
-    double voltage = 0;
-    
+    //double voltage = 0;
+    char letter;	
+    int s_rate= 500;
    //config timers and serial
     config_main();
     
     //config adc at startup
     config_adc();
+    config_timer2(s_rate); //standart timer2 config for a sample rate of 100Hz
     
     
     while(1)
     {
+       
+        //printf("\rEnter option: read \"r\" or set samplerate \"t\" :");	//display user instructions in terminal
+
+        while (RXbuffer[str_pos-1]!='\r'); // wait for carriage return should it be RXbuffer[str_pos -1]?
+        //printf("\n\rRXbuffer print:\t %s\n", RXbuffer);	
+        sscanf(RXbuffer,"%c", &letter);	//analises the string received and stores the values to the given variables
+        //sscanf(RXbuffer,"%d", &s_rate);
         
-        if(t_buf==512){
+        //printf("letter = %c\n\r", letter);
+        //printf("samplerate = %d\n\r", s_rate);
+        switch ( letter ) {
+        case 'r':
+            //printf("read mode");
+            while(t_buf <512){
+                if(goADC){ 
+                    val = convert_adc();
+                    //printf("%d\r\n",val);
+                    buf[t_buf]=val;
+                    _LATF0 = ~_LATF0 ; // Toggle LED
+                    goADC = 0;
+                    t_buf++;
+                }
+            }
             
             for(i=0;i<512;i++){
                 val = buf[i];
-                voltage = val*0.00488-0.1;
-                printf("%d,%d\r\n", i,val);
-             t_buf=0;
+                //voltage = val*0.00488-0.1;
+                printf("%d\r",val);
             }
+            t_buf=0;
+            break;
+        case 't':
+           while(1){
+                if(goADC){ 
+                    val = convert_adc();
+                    printf("%d\r\n",val);
+                    //buf[t_buf]=val;
+                    _LATF0 = ~_LATF0 ; // Toggle LED
+                    goADC = 0;
+                    //t_buf++;
+                }
+               
+               
+           } 
            
-            
+            break;
+        default:
+            printf("Invalid Option = %c\n", letter);
+          break;
         }
-        
-        
-        
-        
-        //2000Hz Samplerate
-        if(goADC){ 
-            if(t_buf <512){
-                val = convert_adc();
-                buf[t_buf]=val;  
-              //  _LATF0 = ~_LATF0 ; // Toggle LED
-                goADC = 0;
-                t_buf++;
-            }
+
+        str_pos = 0;	//returns the pointer to position zero in the circular buffer
+        for(i=0;i<RXBUFFSIZE;i++){
+            RXbuffer[i] = '\0';		//erases the buffer
         }
+        //printf("\n\rRXbuffer print:\t %s\n", RXbuffer);
     }
-return 0;
+    return 0;
 }
 
 void config_adc(void){
@@ -198,25 +244,13 @@ void config_main(){
     _TRISC13 = 0;
     _LATC13 = 1;
     
-    /*Timer 2 1ms/1kHz*/
-    T2CONbits.TON = 0;      //Timer_2 is OFF
-    TMR2 = 0;               //resets Timer_2
-    
-    //PR2 = 7372;           //800Hz
-    //PR2 = 2049;             //3.4kHz
-    //PR2 = 29491;            // 200Hz
-    PR2 = 2*29491;            // 100Hz
-    T2CONbits.TCS = 0;      //choose FCY as clock source for Timer_2
-    T2CONbits.TCKPS = 0x00; //sets the Timer_2 pre-scaler to 1
-    IFS0bits.T2IF = 0;      //clears Timer_2 interrupt flag
-    _T2IE = 1;              //enables Timer_2 Interrupts
-    T2CONbits.TON = 1;      //turns Timer_2 on     
+  
     
     /*PWM configure for OC2 - 1kHz@50% */
-    OC2R = 0;               //Initial Delay (only for the first cycle)
-    OC2RS = PR2/2;          //sets the initial duty_cycle;
-    OC2CONbits.OCM = 6;     //set OC2 mode to PWM
-    OC2CONbits.OCTSEL = 0;  //selects Timer_2 as the OC2 clock source
+    //OC2R = 0;               //Initial Delay (only for the first cycle)
+    //OC2RS = PR2/2;          //sets the initial duty_cycle;
+    //OC2CONbits.OCM = 6;     //set OC2 mode to PWM
+    //OC2CONbits.OCTSEL = 0;  //selects Timer_2 as the OC2 clock source
    
 /***********************
 * Serial Port configuration bits - UART2
@@ -241,4 +275,25 @@ void config_main(){
     
     printf("\n\rSerial port ONLINE \n"); 
     ADPCFG = 0xFC;			//AN0 and AN1 are analog inputs //	ADPCFG = 0xFFFB; // all PORTB = Digital; RB2 = analog
+}
+
+void config_timer2(int s_rate){
+    /*Timer 2 1ms/1kHz*/
+    T2CONbits.TON = 0;      //Timer_2 is OFF
+    TMR2 = 0;               //resets Timer_2
+    //int val_PR2 = 294912/(s_rate/100);
+    //printf("%d",val_PR2);
+    //signal gen play -n synth 10 sin 220
+    PR2 = 36864/(s_rate/50);
+    //printf("%d",PR2);
+    // PR2 = 36864/5;        // 200Hz
+    //PR2 = 147456;          // 200Hz
+    //PR2 = 73728;           // 300Hz
+    //PR2 = 36864;             // 400Hz
+    //PR2 = 18432;           // 500Hz
+    T2CONbits.TCS = 0;      //choose FCY as clock source for Timer_2
+    T2CONbits.TCKPS = 0x01; //sets the Timer_2 pre-scaler to 8
+    IFS0bits.T2IF = 0;      //clears Timer_2 interrupt flag
+    _T2IE = 1;              //enables Timer_2 Interrupts
+    T2CONbits.TON = 1;      //turns Timer_2 on   
 }

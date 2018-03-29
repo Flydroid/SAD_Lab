@@ -1,3 +1,4 @@
+import csv
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -5,7 +6,7 @@ import matplotlib.pyplot as plt
 #pylab inline --no-import-all
 
 
-with open("sin440Hz_100HzSamp.txt") as f:
+with open("V_1000_2.txt") as f:
     data = f.readlines()
 # you may also want to remove whitespace characters like `\n` at the end of each line
 data = [x.strip() for x in data] 
@@ -14,7 +15,7 @@ data = [int(x) for x in data]
 data = [x*(5/1024)-0.1 for x in data ]
 
 #print(data)
-s_rate = 200
+s_rate = 1000
 samples = len(data)
 t_end = samples/s_rate
 
@@ -28,12 +29,12 @@ plt.ylabel('Amplitude ($V$)')
 V_fft = np.fft.fft(data)
 
 #half 
-N = int(len(V_fft/2+1))
+N = int(len(V_fft/2))
 
 
 plt.figure("fft of raw data")
 freq= np.linspace(0, s_rate/2,N)
-plt.plot(freq, 2.0*np.abs(V_fft[:N]/N))
+plt.plot(freq, np.abs(V_fft[0:N]))
 plt.xlabel('Frequency ($Hz$)')
 plt.ylabel('Amplitude ($Unit$)')
 
